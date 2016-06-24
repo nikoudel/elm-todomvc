@@ -17,11 +17,14 @@ import Html.Attributes exposing (..)
 import Html.Events exposing (..)
 import Html.Lazy exposing (lazy, lazy2)
 import Json.Decode as Json
+import Json.Decode exposing ((:=), andThen)
 import String
+import Json.Encode
+import List
+import Debug
 
 
-
-main : Program (Maybe Model)
+main : Program (Maybe Json.Encode.Value)
 main =
   App.programWithFlags
     { init = init
@@ -31,7 +34,7 @@ main =
     }
 
 
-port setStorage : Model -> Cmd msg
+port setStorage : Json.Encode.Value -> Cmd msg
 
 port focus : String -> Cmd msg
 
@@ -41,12 +44,11 @@ command for every step of the update function.
 -}
 withSetStorage : ( Model, Cmd Msg ) -> ( Model, Cmd Msg )
 withSetStorage (model, cmds) =
-  ( model, Cmd.batch [ setStorage model, cmds ] )
+  ( model, Cmd.batch [ setStorage (modelToValue model), cmds ] )
 
 
 
 -- MODEL
-
 
 -- The full application state of our todo app.
 type alias Model =
@@ -62,8 +64,13 @@ type alias Task =
     , completed : Bool
     , editing : Bool
     , id : Int
+    , importance : Importance
     }
 
+type Importance
+  = Normal
+  | High
+  | Low
 
 emptyModel : Model
 emptyModel =
@@ -80,14 +87,78 @@ newTask desc id =
   , completed = False
   , editing = False
   , id = id
+  , importance = Normal
   }
 
 
-init : Maybe Model -> ( Model, Cmd Msg )
+init : Maybe Json.Encode.Value -> ( Model, Cmd Msg )
 init savedModel =
-  Maybe.withDefault emptyModel savedModel ! []
+  case savedModel of
+    Just value -> Maybe.withDefault emptyModel (Json.decodeValue modelDecoder value |> resultToMaybe) ! []
+    _ -> emptyModel ! []
 
+-- Json.Decode
 
+modelDecoder : Json.Decoder Model
+modelDecoder =
+  Json.object4 Model
+    ("tasks" := Json.list taskDecoder)
+    ("field" := Json.string)
+    ("uid" := Json.int)
+    ("visibility" := Json.string)
+
+taskDecoder : Json.Decoder Task
+taskDecoder =
+  Json.object5 Task
+    ("description" := Json.string)
+    ("completed" := Json.bool)
+    ("editing" := Json.bool)
+    ("id" := Json.int)
+    ("importance" := Json.string `andThen` importanceDecoder)
+
+importanceDecoder : String -> Json.Decoder Importance
+importanceDecoder tag =
+  case tag of
+    "Normal" -> Json.succeed Normal
+    "High" -> Json.succeed High
+    "Low" -> Json.succeed Low
+    _ -> Json.fail (tag ++ " is not a recognized tag for Importance")
+
+resultToMaybe : Result String Model -> Maybe Model
+resultToMaybe result =
+  case result of
+    Result.Ok model -> Just model
+    Result.Err error -> Debug.log error Nothing
+
+-- Json.Encode
+
+modelToValue : Model -> Json.Encode.Value
+modelToValue model =
+  Json.Encode.object
+    [
+      ("tasks", Json.Encode.list (List.map taskToValue model.tasks)),
+      ("field", Json.Encode.string model.field),
+      ("uid", Json.Encode.int model.uid),
+      ("visibility", Json.Encode.string model.visibility)
+    ]
+
+taskToValue : Task -> Json.Encode.Value
+taskToValue task =
+  Json.Encode.object
+    [
+      ("description", Json.Encode.string task.description),
+      ("completed", Json.Encode.bool task.completed),
+      ("editing", Json.Encode.bool task.editing),
+      ("id", Json.Encode.int task.id),
+      ("importance", importanceToValue task.importance)
+    ]
+
+importanceToValue : Importance -> Json.Encode.Value
+importanceToValue importance =
+  case importance of
+    Normal -> Json.Encode.string "Normal"
+    High -> Json.Encode.string "High"
+    Low -> Json.Encode.string "Low"
 
 -- UPDATE
 
